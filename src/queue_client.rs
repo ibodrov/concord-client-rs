@@ -25,7 +25,7 @@ use tracing::{debug, info, warn};
 use crate::{
     api_error,
     error::ApiError,
-    model::{AgentId, ProcessId, SessionToken},
+    model::{AgentId, InstanceId, SessionToken},
 };
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -84,7 +84,7 @@ enum Message {
         #[serde(rename = "sessionToken")]
         session_token: SessionToken,
         #[serde(rename = "processId")]
-        process_id: ProcessId,
+        process_id: InstanceId,
         // TODO imports
     },
 }
@@ -99,7 +99,7 @@ pub struct CommandResponse {
 pub struct ProcessResponse {
     pub correlation_id: CorrelationId,
     pub session_token: SessionToken,
-    pub process_id: ProcessId,
+    pub process_id: InstanceId,
 }
 
 type Reply = Result<Message, ApiError>;
@@ -278,32 +278,35 @@ impl QueueClient {
         })
     }
 
+    async fn send_and_wait_for_reply(&self, correlation_id: CorrelationId, msg: Message) -> Reply {
+        let json = serde_json::to_string(&msg)?;
+
+        let (reply_sender, reply_receiver) = oneshot::channel::<Reply>();
+
+        let msg = MessageToSend::text(json, Responder(correlation_id, reply_sender));
+        if let Err(e) = self.tx.send(msg).await {
+            return Err(api_error!("Send error: {e}"));
+        }
+
+        match reply_receiver.await {
+            Ok(reply) => reply,
+            Err(e) => Err(api_error!("Error while receiving reply: {e}")),
+        }
+    }
+
     pub async fn next_command(
         &self,
         correlation_id: CorrelationId,
     ) -> Result<CommandResponse, ApiError> {
-        // prepare a request
-        let req = Message::CommandRequest {
+        let msg = Message::CommandRequest {
             correlation_id,
             agent_id: self.agent_id,
         };
 
-        // serialize to JSON
-        let json = serde_json::to_string(&req)?;
-
-        // send the request
-        let (reply_sender, reply_receiver) = oneshot::channel::<Reply>();
-        let resp = Responder(correlation_id, reply_sender);
-        let msg = MessageToSend::text(json, resp);
-        if let Err(e) = self.tx.send(msg).await {
-            return Err(api_error!("Send error: {}", e));
-        }
-
-        // wait for the reply
-        match reply_receiver.await {
-            Ok(Ok(Message::CommandResponse {
+        match self.send_and_wait_for_reply(correlation_id, msg).await {
+            Ok(Message::CommandResponse {
                 correlation_id: reply_correlation_id,
-            })) => {
+            }) => {
                 if correlation_id == reply_correlation_id {
                     Ok(CommandResponse { correlation_id })
                 } else {
@@ -322,30 +325,17 @@ impl QueueClient {
         &self,
         correlation_id: CorrelationId,
     ) -> Result<ProcessResponse, ApiError> {
-        // prepare a request
-        let req = Message::ProcessRequest {
+        let msg = Message::ProcessRequest {
             correlation_id,
             capabilities: serde_json::json!(&self.capabilities),
         };
 
-        // serialize to JSON
-        let json = serde_json::to_string(&req)?;
-
-        // send the request
-        let (reply_sender, reply_receiver) = oneshot::channel::<Reply>();
-        let resp = Responder(correlation_id, reply_sender);
-        let msg = MessageToSend::text(json, resp);
-        if let Err(e) = self.tx.send(msg).await {
-            return Err(api_error!("Send error: {}", e));
-        }
-
-        // wait for the reply
-        match reply_receiver.await {
-            Ok(Ok(Message::ProcessResponse {
+        match self.send_and_wait_for_reply(correlation_id, msg).await {
+            Ok(Message::ProcessResponse {
                 correlation_id: reply_correlation_id,
                 session_token,
                 process_id,
-            })) => {
+            }) => {
                 if correlation_id == reply_correlation_id {
                     Ok(ProcessResponse {
                         correlation_id,

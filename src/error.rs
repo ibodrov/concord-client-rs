@@ -45,3 +45,19 @@ impl From<serde_json::Error> for ApiError {
         }
     }
 }
+
+impl From<reqwest::Error> for ApiError {
+    fn from(e: reqwest::Error) -> Self {
+        ApiError {
+            message: e.to_string(),
+        }
+    }
+}
+
+impl From<url::ParseError> for ApiError {
+    fn from(e: url::ParseError) -> Self {
+        ApiError {
+            message: e.to_string(),
+        }
+    }
+}
