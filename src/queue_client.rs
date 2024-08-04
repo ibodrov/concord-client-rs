@@ -224,30 +224,13 @@ impl QueueClient {
                                 debug!("Received a pong");
                             }
                             tungstenite::Message::Text(text) => {
-                                match serde_json::from_str::<Message>(&text) {
-                                    Ok(
-                                        cmd @ Message::CommandResponse { correlation_id, .. }
-                                        | cmd @ Message::ProcessResponse { correlation_id, .. },
-                                    ) => {
-                                        if let Some(Responder(_, responder)) =
-                                            message_queue.lock().await.remove(&correlation_id)
-                                        {
-                                            if responder.send(Ok(cmd)).is_err() {
-                                                warn!("Responder error (most likely a bug)");
-                                            }
-                                        }
-                                    }
-                                    Ok(msg) => {
-                                        warn!("Unexpected message body: {:?}", msg);
-                                    }
-                                    Err(e) => {
-                                        warn!("Error while parsing message: {}", e);
-                                    }
-                                }
+                                debug!("Received message: {}", text);
+                                let message_queue = message_queue.clone();
+                                QueueClient::handle_text_message(text, message_queue).await;
                             }
                             _ => {
                                 // log and ignore bad messages
-                                warn!("Unexpected message: {:?}", msg);
+                                warn!("Unexpected message (possibly a bug): {:?}", msg);
                             }
                         },
                         Err(e) => {
@@ -283,7 +266,7 @@ impl QueueClient {
                     Ok(CommandResponse { correlation_id })
                 } else {
                     Err(api_error!(
-                        "Unexpected correlation ID (most likely a bug): {:?}",
+                        "Unexpected correlation ID: {:?}",
                         reply_correlation_id
                     ))
                 }
@@ -313,13 +296,53 @@ impl QueueClient {
                     })
                 } else {
                     Err(api_error!(
-                        "Unexpected correlation ID (most likely a bug): {:?}",
+                        "Unexpected correlation ID: {:?}",
                         reply_correlation_id
                     ))
                 }
             }
             Ok(msg) => Err(api_error!("Unexpected message: {:?}", msg)),
             Err(e) => Err(api_error!("Error while parsing message: {}", e)),
+        }
+    }
+
+    async fn send_and_wait_for_reply(&self, correlation_id: CorrelationId, msg: Message) -> Reply {
+        let json = serde_json::to_string(&msg)?;
+
+        let (reply_sender, reply_receiver) = oneshot::channel::<Reply>();
+
+        let msg = MessageToSend::text(json, Responder(correlation_id, reply_sender));
+        if let Err(e) = self.tx.send(msg).await {
+            return Err(api_error!("Send error: {e}"));
+        }
+
+        match reply_receiver.await {
+            Ok(reply) => reply,
+            Err(e) => Err(api_error!("Error while receiving reply: {e}")),
+        }
+    }
+
+    async fn handle_text_message(text: String, message_queue: Arc<Mutex<HashMap<CorrelationId, Responder>>>) {
+        match serde_json::from_str::<Message>(&text) {
+            Ok(
+                cmd @ Message::CommandResponse { correlation_id, .. }
+                | cmd @ Message::ProcessResponse { correlation_id, .. },
+            ) => {
+                let mut message_queue = message_queue.lock().await;
+                if let Some(Responder(_, responder)) = message_queue.remove(&correlation_id) {
+                    if responder.send(Ok(cmd)).is_err() {
+                        warn!("Responder error (most likely a bug)");
+                    }
+                }
+            }
+            Ok(msg) => {
+                // log and ignore bad messages
+                warn!("Unexpected message body (most likely a bug): {:?}", msg);
+            }
+            Err(e) => {
+                // complain on parsing errors
+                warn!("Error while parsing message (possibly a bug): {}", e);
+            }
         }
     }
 
@@ -348,21 +371,5 @@ impl QueueClient {
             .map_err(|e| ApiError {
                 message: e.to_string(),
             })
-    }
-
-    async fn send_and_wait_for_reply(&self, correlation_id: CorrelationId, msg: Message) -> Reply {
-        let json = serde_json::to_string(&msg)?;
-
-        let (reply_sender, reply_receiver) = oneshot::channel::<Reply>();
-
-        let msg = MessageToSend::text(json, Responder(correlation_id, reply_sender));
-        if let Err(e) = self.tx.send(msg).await {
-            return Err(api_error!("Send error: {e}"));
-        }
-
-        match reply_receiver.await {
-            Ok(reply) => reply,
-            Err(e) => Err(api_error!("Error while receiving reply: {e}")),
-        }
     }
 }
