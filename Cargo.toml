@@ -1,6 +1,6 @@
 [package]
 name = "concord-client"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 authors = ["Ivan Bodrov <ibodrov@gmail.com>"]
 license = "Apache-2.0"
