@@ -1,22 +1,23 @@
 use std::fmt::Debug;
 
+use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::ClientBuilder;
 use url::Url;
 
 use crate::{
     api_error,
     error::ApiError,
-    model::{AgentId, InstanceId, ProcessStatus},
+    model::{AgentId, ApiToken, ProcessId, ProcessStatus},
 };
 
 pub struct Config {
     pub base_url: Url,
-    pub auth_header: String,
+    pub api_token: ApiToken,
 }
 
 pub struct ApiClient {
     base_url: Url,
-    auth_header: String,
+    api_token: ApiToken,
     client: reqwest::Client,
 }
 
@@ -34,12 +35,12 @@ impl ApiClient {
 
         let Config {
             base_url,
-            auth_header,
+            api_token,
         } = config;
 
         Ok(ApiClient {
             base_url,
-            auth_header,
+            api_token,
             client,
         })
     }
@@ -47,7 +48,7 @@ impl ApiClient {
     #[tracing::instrument]
     pub async fn update_status(
         &self,
-        instance_id: InstanceId,
+        instance_id: ProcessId,
         agent_id: AgentId,
         status: ProcessStatus,
     ) -> Result<(), ApiError> {
@@ -59,8 +60,8 @@ impl ApiClient {
             .client
             .post(url)
             .query(&[("agent_id", agent_id.0)])
-            .header("Authorization", &self.auth_header)
-            .header("Content-Type", "text/plain")
+            .header(AUTHORIZATION, &self.api_token)
+            .header(CONTENT_TYPE, "text/plain")
             .body(format!("{status}"))
             .send()
             .await?;

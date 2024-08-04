@@ -4,10 +4,33 @@ use uuid::Uuid;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionToken(String);
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct InstanceId(pub Uuid);
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiToken(String);
 
-impl std::fmt::Display for InstanceId {
+impl ApiToken {
+    pub fn new(v: String) -> Self {
+        Self(v)
+    }
+}
+
+impl TryFrom<&ApiToken> for http::HeaderValue {
+    type Error = http::header::InvalidHeaderValue;
+
+    fn try_from(value: &ApiToken) -> Result<Self, Self::Error> {
+        http::HeaderValue::from_str(&value.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ProcessId(Uuid);
+
+impl ProcessId {
+    pub fn new(v: Uuid) -> Self {
+        Self(v)
+    }
+}
+
+impl std::fmt::Display for ProcessId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }

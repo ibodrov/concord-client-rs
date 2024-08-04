@@ -25,7 +25,7 @@ use tracing::{debug, info, warn};
 use crate::{
     api_error,
     error::ApiError,
-    model::{AgentId, InstanceId, SessionToken},
+    model::{AgentId, ApiToken, ProcessId, SessionToken},
 };
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -84,7 +84,7 @@ enum Message {
         #[serde(rename = "sessionToken")]
         session_token: SessionToken,
         #[serde(rename = "processId")]
-        process_id: InstanceId,
+        process_id: ProcessId,
         // TODO imports
     },
 }
@@ -99,7 +99,7 @@ pub struct CommandResponse {
 pub struct ProcessResponse {
     pub correlation_id: CorrelationId,
     pub session_token: SessionToken,
-    pub process_id: InstanceId,
+    pub process_id: ProcessId,
 }
 
 type Reply = Result<Message, ApiError>;
@@ -137,7 +137,7 @@ impl MessageToSend {
 pub struct Config {
     pub agent_id: AgentId,
     pub uri: Uri,
-    pub auth_header: String,
+    pub api_token: ApiToken,
     pub capabilities: serde_json::Value,
     pub ping_interval: Duration,
 }
@@ -153,7 +153,7 @@ pub struct QueueClient {
 
 impl QueueClient {
     pub async fn connect(config: Config) -> Result<Self, ApiError> {
-        let req = QueueClient::create_connect_request(&config.uri, &config.auth_header)?;
+        let req = QueueClient::create_connect_request(&config.uri, &config.api_token)?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(req).await?;
         let (mut write, mut read) = ws_stream.split();
 
@@ -354,7 +354,10 @@ impl QueueClient {
         }
     }
 
-    fn create_connect_request(uri: &Uri, auth_header: &str) -> Result<http::Request<()>, ApiError> {
+    fn create_connect_request(
+        uri: &Uri,
+        api_token: &ApiToken,
+    ) -> Result<http::Request<()>, ApiError> {
         let host = format!(
             "{}:{}",
             uri.host().unwrap_or("localhost"),
@@ -366,7 +369,7 @@ impl QueueClient {
         Request::builder()
             .uri(uri.clone())
             .header(HOST, host)
-            .header(AUTHORIZATION, auth_header)
+            .header(AUTHORIZATION, api_token)
             .header(CONNECTION, "Upgrade")
             .header(UPGRADE, "websocket")
             .header(SEC_WEBSOCKET_VERSION, "13")
