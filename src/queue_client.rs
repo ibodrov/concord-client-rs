@@ -152,7 +152,7 @@ pub struct QueueClient {
 
 impl QueueClient {
     pub async fn connect(config: Config) -> Result<Self, ApiError> {
-        let req = QueueClient::create_connect_request(&config.uri, &config.api_token)?;
+        let req = QueueClient::create_connect_request(config.uri, config.api_token)?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(req).await?;
         let (mut write, mut read) = ws_stream.split();
 
@@ -346,7 +346,7 @@ impl QueueClient {
         }
     }
 
-    fn create_connect_request(uri: &Uri, api_token: &ApiToken) -> Result<http::Request<()>, ApiError> {
+    fn create_connect_request(uri: Uri, api_token: ApiToken) -> Result<http::Request<()>, ApiError> {
         let host = format!(
             "{}:{}",
             uri.host().unwrap_or("localhost"),
