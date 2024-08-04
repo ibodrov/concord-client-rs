@@ -33,10 +33,7 @@ impl ApiClient {
     pub fn new(config: Config) -> Result<Self, ApiError> {
         let client = ClientBuilder::new().build()?;
 
-        let Config {
-            base_url,
-            api_token,
-        } = config;
+        let Config { base_url, api_token } = config;
 
         Ok(ApiClient {
             base_url,

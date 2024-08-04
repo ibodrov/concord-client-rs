@@ -8,8 +8,7 @@ use std::{
 use futures::{SinkExt, StreamExt};
 use http::{
     header::{
-        AUTHORIZATION, CONNECTION, HOST, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, UPGRADE,
-        USER_AGENT,
+        AUTHORIZATION, CONNECTION, HOST, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, UPGRADE, USER_AGENT,
     },
     Request, Uri,
 };
@@ -20,7 +19,7 @@ use tokio::{
     time::interval,
 };
 use tokio_tungstenite::tungstenite::{self, handshake::client::generate_key};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::{
     api_error,
@@ -226,22 +225,14 @@ impl QueueClient {
                             }
                             tungstenite::Message::Text(text) => {
                                 match serde_json::from_str::<Message>(&text) {
-                                    Ok(cmd @ Message::CommandResponse { correlation_id, .. }) => {
-                                        info!("Received a command: {:?}", cmd);
+                                    Ok(
+                                        cmd @ Message::CommandResponse { correlation_id, .. }
+                                        | cmd @ Message::ProcessResponse { correlation_id, .. },
+                                    ) => {
                                         if let Some(Responder(_, responder)) =
                                             message_queue.lock().await.remove(&correlation_id)
                                         {
                                             if responder.send(Ok(cmd)).is_err() {
-                                                warn!("Responder error (most likely a bug)");
-                                            }
-                                        }
-                                    }
-                                    Ok(proc @ Message::ProcessResponse { correlation_id, .. }) => {
-                                        info!("Received a process: {:?}", proc);
-                                        if let Some(Responder(_, responder)) =
-                                            message_queue.lock().await.remove(&correlation_id)
-                                        {
-                                            if responder.send(Ok(proc)).is_err() {
                                                 warn!("Responder error (most likely a bug)");
                                             }
                                         }
@@ -278,26 +269,7 @@ impl QueueClient {
         })
     }
 
-    async fn send_and_wait_for_reply(&self, correlation_id: CorrelationId, msg: Message) -> Reply {
-        let json = serde_json::to_string(&msg)?;
-
-        let (reply_sender, reply_receiver) = oneshot::channel::<Reply>();
-
-        let msg = MessageToSend::text(json, Responder(correlation_id, reply_sender));
-        if let Err(e) = self.tx.send(msg).await {
-            return Err(api_error!("Send error: {e}"));
-        }
-
-        match reply_receiver.await {
-            Ok(reply) => reply,
-            Err(e) => Err(api_error!("Error while receiving reply: {e}")),
-        }
-    }
-
-    pub async fn next_command(
-        &self,
-        correlation_id: CorrelationId,
-    ) -> Result<CommandResponse, ApiError> {
+    pub async fn next_command(&self, correlation_id: CorrelationId) -> Result<CommandResponse, ApiError> {
         let msg = Message::CommandRequest {
             correlation_id,
             agent_id: self.agent_id,
@@ -321,10 +293,7 @@ impl QueueClient {
         }
     }
 
-    pub async fn next_process(
-        &self,
-        correlation_id: CorrelationId,
-    ) -> Result<ProcessResponse, ApiError> {
+    pub async fn next_process(&self, correlation_id: CorrelationId) -> Result<ProcessResponse, ApiError> {
         let msg = Message::ProcessRequest {
             correlation_id,
             capabilities: serde_json::json!(&self.capabilities),
@@ -354,10 +323,7 @@ impl QueueClient {
         }
     }
 
-    fn create_connect_request(
-        uri: &Uri,
-        api_token: &ApiToken,
-    ) -> Result<http::Request<()>, ApiError> {
+    fn create_connect_request(uri: &Uri, api_token: &ApiToken) -> Result<http::Request<()>, ApiError> {
         let host = format!(
             "{}:{}",
             uri.host().unwrap_or("localhost"),
@@ -382,5 +348,21 @@ impl QueueClient {
             .map_err(|e| ApiError {
                 message: e.to_string(),
             })
+    }
+
+    async fn send_and_wait_for_reply(&self, correlation_id: CorrelationId, msg: Message) -> Reply {
+        let json = serde_json::to_string(&msg)?;
+
+        let (reply_sender, reply_receiver) = oneshot::channel::<Reply>();
+
+        let msg = MessageToSend::text(json, Responder(correlation_id, reply_sender));
+        if let Err(e) = self.tx.send(msg).await {
+            return Err(api_error!("Send error: {e}"));
+        }
+
+        match reply_receiver.await {
+            Ok(reply) => reply,
+            Err(e) => Err(api_error!("Error while receiving reply: {e}")),
+        }
     }
 }
