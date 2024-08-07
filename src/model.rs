@@ -80,3 +80,49 @@ impl std::fmt::Display for ProcessStatus {
         }
     }
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SegmentCorrelationId(Uuid);
+
+impl SegmentCorrelationId {
+    pub fn new(v: Uuid) -> Self {
+        Self(v)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LogSegmentId(i64);
+
+impl std::fmt::Display for LogSegmentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum LogSegmentStatus {
+    Ok,
+    Failed,
+    Running,
+    Suspended,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LogSegmentRequest {
+    #[serde(rename = "correlationId")]
+    pub correlation_id: SegmentCorrelationId,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LogSegmentOperationResponse {
+    pub id: LogSegmentId,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct LogSegmentUpdateRequest {
+    pub status: Option<LogSegmentStatus>,
+    pub warnings: Option<u16>,
+    pub errors: Option<u16>,
+}
