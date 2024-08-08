@@ -1,15 +1,25 @@
+use std::fmt::Debug;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+pub static USER_AGENT_VALUE: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionToken(String);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ApiToken(String);
 
 impl ApiToken {
     pub fn new(v: String) -> Self {
         Self(v)
+    }
+}
+
+impl Debug for ApiToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ApiToken").field(&"********").finish()
     }
 }
 
@@ -42,6 +52,14 @@ pub struct AgentId(pub Uuid);
 impl std::fmt::Display for AgentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<AgentId> for http::HeaderValue {
+    type Error = http::header::InvalidHeaderValue;
+
+    fn try_from(value: AgentId) -> Result<Self, Self::Error> {
+        http::HeaderValue::from_str(&value.0.to_string())
     }
 }
 
@@ -90,7 +108,7 @@ impl SegmentCorrelationId {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct LogSegmentId(i64);
 
 impl std::fmt::Display for LogSegmentId {

@@ -15,11 +15,9 @@ use crate::{
     error::ApiError,
     model::{
         AgentId, ApiToken, LogSegmentId, LogSegmentOperationResponse, LogSegmentRequest,
-        LogSegmentUpdateRequest, ProcessId, ProcessStatus,
+        LogSegmentUpdateRequest, ProcessId, ProcessStatus, USER_AGENT_VALUE,
     },
 };
-
-static USER_AGENT_VALUE: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 pub struct Config {
     pub base_url: Url,
@@ -99,7 +97,6 @@ impl Debug for ProcessApiClient<'_> {
 }
 
 impl<'a> ProcessApiClient<'a> {
-    #[tracing::instrument]
     pub async fn update_status(
         &self,
         process_id: ProcessId,

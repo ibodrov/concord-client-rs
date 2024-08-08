@@ -1,6 +1,6 @@
 # concord-client
 
-A work-in-progress wrapper for [Concord](https://github.com/walmartlabs/concord/) API.
+A work-in-progress high-level wrapper for [Concord](https://github.com/walmartlabs/concord/) API.
 Uses [tokio](https://tokio.rs/) for async I/O.
 
 Depends on [reqwest](https://github.com/seanmonstar/reqwest) and
@@ -15,6 +15,8 @@ WebSocket support, respectively.
   - [ ] automatic re-connection on errors
 - basic [ApiClient](src/api_client.rs) implementation:
   - [x] can update process status
+  - [x] download process state
+  - [x] create and update log segments
   - [ ] everything else
 
 ## Code Conventions

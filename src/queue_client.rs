@@ -24,7 +24,7 @@ use tracing::{debug, warn};
 use crate::{
     api_error,
     error::ApiError,
-    model::{AgentId, ApiToken, ProcessId, SessionToken},
+    model::{AgentId, ApiToken, ProcessId, SessionToken, USER_AGENT_VALUE},
 };
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -152,7 +152,7 @@ pub struct QueueClient {
 
 impl QueueClient {
     pub async fn connect(config: Config) -> Result<Self, ApiError> {
-        let req = QueueClient::create_connect_request(config.uri, config.api_token)?;
+        let req = QueueClient::create_connect_request(config.uri, config.agent_id, config.api_token)?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(req).await?;
         let (mut write, mut read) = ws_stream.split();
 
@@ -234,7 +234,7 @@ impl QueueClient {
                             }
                         },
                         Err(e) => {
-                            // complain on network errors
+                            // complain about network errors
                             warn!("Read error: {}", e);
                         }
                     }
@@ -340,13 +340,17 @@ impl QueueClient {
                 warn!("Unexpected message body (most likely a bug): {:?}", msg);
             }
             Err(e) => {
-                // complain on parsing errors
+                // complain about parsing errors
                 warn!("Error while parsing message (possibly a bug): {}", e);
             }
         }
     }
 
-    fn create_connect_request(uri: Uri, api_token: ApiToken) -> Result<http::Request<()>, ApiError> {
+    fn create_connect_request(
+        uri: Uri,
+        agent_id: AgentId,
+        api_token: ApiToken,
+    ) -> Result<http::Request<()>, ApiError> {
         let host = format!(
             "{}:{}",
             uri.host().unwrap_or("localhost"),
@@ -363,10 +367,9 @@ impl QueueClient {
             .header(UPGRADE, "websocket")
             .header(SEC_WEBSOCKET_VERSION, "13")
             .header(SEC_WEBSOCKET_KEY, ws_key)
-            .header(
-                USER_AGENT,
-                format!("concord-client-rs/{}", env!("CARGO_PKG_VERSION")),
-            )
+            .header(USER_AGENT, USER_AGENT_VALUE)
+            .header("X-Concord-Agent-Id", agent_id)
+            .header("X-Concord-Agent", USER_AGENT_VALUE)
             .body(())
             .map_err(|e| ApiError {
                 message: e.to_string(),
