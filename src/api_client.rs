@@ -135,17 +135,16 @@ impl<'a> ProcessApiClient<'a> {
         }
 
         let path = self.new_state_file_path(process_id.to_string(), ".zip").await?;
-        let mut file = match File::create(&path).await {
-            Ok(file) => file,
-            Err(e) => return Err(api_error!("Failed to create a temporary file: {}", e)),
-        };
+        let mut file = File::create(&path)
+            .await
+            .map_err(|e| api_error!("Failed to create a temporary file: {}", e))?;
 
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
-            if let Err(e) = file.write_all(&chunk).await {
-                return Err(api_error!("Failed to write to a temporary file: {}", e));
-            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| api_error!("Failed to write to a temporary file: {}", e))?;
         }
 
         Ok(path)
