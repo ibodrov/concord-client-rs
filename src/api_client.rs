@@ -1,23 +1,40 @@
-use std::{fmt::Debug, path::PathBuf};
+use std::path::PathBuf;
 
-use bytes::Bytes;
-use futures::StreamExt;
-use http::{
-    header::{AUTHORIZATION, CONTENT_TYPE, USER_AGENT},
-    HeaderMap, HeaderValue,
-};
-use reqwest::ClientBuilder;
-use tokio::{fs::File, io::AsyncWriteExt};
+use http::{header, HeaderValue};
 use url::Url;
 
 use crate::{
-    api_error,
+    api_err, api_error,
     error::ApiError,
     model::{
         AgentId, ApiToken, LogSegmentId, LogSegmentOperationResponse, LogSegmentRequest,
         LogSegmentUpdateRequest, ProcessId, ProcessStatus, USER_AGENT_VALUE,
     },
 };
+
+macro_rules! get {
+    ($client:expr, $url_fmt:expr $(, $args:expr)*) => {
+        $client.parent.client
+            .get($client.config.base_url.join(&format!($url_fmt, $($args),*)).expect("valid url"))
+    };
+}
+
+macro_rules! post {
+    ($client:expr, $url_fmt:expr $(, $args:expr)*) => {
+        $client
+            .parent
+            .client
+            .post($client.config.base_url.join(&format!($url_fmt, $($args),*)).expect("valid url"))
+    };
+}
+
+macro_rules! post_json {
+    ($client:expr, $body:expr, $url_fmt:expr $(, $args:expr)*) => {
+        post!($client, $url_fmt $(, $args),*)
+        .header(header::CONTENT_TYPE, "application/json")
+        .json($body)
+    };
+}
 
 pub struct Config {
     pub base_url: Url,
@@ -30,22 +47,21 @@ pub struct ApiClient {
     client: reqwest::Client,
 }
 
-macro_rules! api_url {
-    ($client:expr, $fmt:expr $(, $args:expr)*) => {
-        $client.config.base_url.join(&format!($fmt, $($args),*)).expect("valid url")
-    };
-}
-
 impl ApiClient {
     pub fn new(config: Config) -> Result<Self, ApiError> {
-        let authorization_header = HeaderValue::try_from(config.api_token.clone())
-            .map_err(|e| api_error!("Invalid api_key: {e}"))?;
+        let authorization_header =
+            HeaderValue::try_from(&config.api_token).map_err(|e| api_error!("Invalid api_key: {e}"))?;
 
-        let mut default_headers = HeaderMap::new();
-        default_headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
-        default_headers.insert(AUTHORIZATION, authorization_header);
+        let default_headers = {
+            let mut m = header::HeaderMap::new();
+            m.insert(header::USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
+            m.insert(header::AUTHORIZATION, authorization_header);
+            m
+        };
 
-        let client = ClientBuilder::new().default_headers(default_headers).build()?;
+        let client = reqwest::ClientBuilder::new()
+            .default_headers(default_headers)
+            .build()?;
 
         Ok(ApiClient { config, client })
     }
@@ -53,42 +69,17 @@ impl ApiClient {
     pub fn process_api(&self) -> ProcessApiClient {
         ProcessApiClient {
             config: &self.config,
-            client: self,
+            parent: self,
         }
-    }
-
-    fn get(&self, url: Url) -> reqwest::RequestBuilder {
-        self.client.get(url)
-    }
-
-    fn post_octet_stream(&self, url: Url, body: Bytes) -> reqwest::RequestBuilder {
-        self.client
-            .post(url)
-            .header(CONTENT_TYPE, "application/octet-stream")
-            .body(body)
-    }
-
-    fn post_text(&self, url: Url, body: impl Into<String>) -> reqwest::RequestBuilder {
-        self.client
-            .post(url)
-            .header(CONTENT_TYPE, "text/plain")
-            .body(body.into())
-    }
-
-    fn post_json(&self, url: Url, body: &impl serde::Serialize) -> reqwest::RequestBuilder {
-        self.client
-            .post(url)
-            .header(CONTENT_TYPE, "application/json")
-            .json(body)
     }
 }
 
 pub struct ProcessApiClient<'a> {
     config: &'a Config,
-    client: &'a ApiClient,
+    parent: &'a ApiClient,
 }
 
-impl Debug for ProcessApiClient<'_> {
+impl std::fmt::Debug for ProcessApiClient<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProcessApiClient")
             .field("config.base_url", &self.config.base_url)
@@ -103,39 +94,37 @@ impl<'a> ProcessApiClient<'a> {
         agent_id: AgentId,
         status: ProcessStatus,
     ) -> Result<(), ApiError> {
-        let resp = self
-            .client
-            .post_text(
-                api_url!(self, "/api/v1/process/{process_id}/status"),
-                format!("{status}"),
-            )
+        let req = format!("{status}");
+        let resp = post!(self, "/api/v1/process/{process_id}/status")
             .query(&[("agent_id", agent_id.0)])
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(req)
             .send()
             .await?;
 
         if !resp.status().is_success() {
-            return Err(api_error!("Failed to update status: {}", resp.status()));
+            return api_err!("Failed to update status: {}", resp.status());
         }
 
         Ok(())
     }
 
     pub async fn download_state(&self, process_id: ProcessId) -> Result<PathBuf, ApiError> {
-        let resp = self
-            .client
-            .get(api_url!(self, "/api/v1/process/{process_id}/state/snapshot"))
+        let resp = get!(self, "/api/v1/process/{process_id}/state/snapshot")
             .send()
             .await?;
 
         if !resp.status().is_success() {
-            return Err(api_error!("Failed to download process state: {}", resp.status()));
+            return api_err!("Failed to download process state: {}", resp.status());
         }
 
         let path = self.new_state_file_path(process_id.to_string(), ".zip").await?;
-        let mut file = File::create(&path)
+        let mut file = tokio::fs::File::create(&path)
             .await
             .map_err(|e| api_error!("Failed to create a temporary file: {}", e))?;
 
+        use futures::StreamExt;
+        use tokio::io::AsyncWriteExt;
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -176,14 +165,12 @@ impl<'a> ProcessApiClient<'a> {
         process_id: ProcessId,
         req: &LogSegmentRequest,
     ) -> Result<LogSegmentId, ApiError> {
-        let resp = self
-            .client
-            .post_json(api_url!(self, "/api/v2/process/{process_id}/log/segment"), req)
+        let resp = post_json!(self, req, "/api/v2/process/{process_id}/log/segment")
             .send()
             .await?;
 
         if !resp.status().is_success() {
-            return Err(api_error!("Failed to update status: {}", resp.status()));
+            return api_err!("Failed to update status: {}", resp.status());
         }
 
         let resp = resp.json::<LogSegmentOperationResponse>().await?;
@@ -196,17 +183,12 @@ impl<'a> ProcessApiClient<'a> {
         segment_id: LogSegmentId,
         req: &LogSegmentUpdateRequest,
     ) -> Result<(), ApiError> {
-        let resp = self
-            .client
-            .post_json(
-                api_url!(self, "/api/v2/process/{process_id}/log/segment/{segment_id}"),
-                req,
-            )
+        let resp = post_json!(self, req, "/api/v2/process/{process_id}/log/segment/{segment_id}")
             .send()
             .await?;
 
         if !resp.status().is_success() {
-            return Err(api_error!("Failed to update status: {}", resp.status()));
+            return api_err!("Failed to update status: {}", resp.status());
         }
 
         Ok(())
@@ -216,19 +198,16 @@ impl<'a> ProcessApiClient<'a> {
         &self,
         process_id: ProcessId,
         segment_id: LogSegmentId,
-        data: Bytes,
+        body: bytes::Bytes,
     ) -> Result<(), ApiError> {
-        let resp = self
-            .client
-            .post_octet_stream(
-                api_url!(self, "/api/v2/process/{process_id}/log/segment/{segment_id}/data"),
-                data,
-            )
+        let resp = post!(self, "/api/v2/process/{process_id}/log/segment/{segment_id}/data")
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .body(body)
             .send()
             .await?;
 
         if !resp.status().is_success() {
-            return Err(api_error!("Failed to update status: {}", resp.status()));
+            return api_err!("Failed to update status: {}", resp.status());
         }
 
         Ok(())

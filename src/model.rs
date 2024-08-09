@@ -23,10 +23,10 @@ impl Debug for ApiToken {
     }
 }
 
-impl TryFrom<ApiToken> for http::HeaderValue {
+impl TryFrom<&ApiToken> for http::HeaderValue {
     type Error = http::header::InvalidHeaderValue;
 
-    fn try_from(value: ApiToken) -> Result<Self, Self::Error> {
+    fn try_from(value: &ApiToken) -> Result<Self, Self::Error> {
         http::HeaderValue::from_str(&value.0)
     }
 }
@@ -55,10 +55,10 @@ impl std::fmt::Display for AgentId {
     }
 }
 
-impl TryFrom<AgentId> for http::HeaderValue {
+impl TryFrom<&AgentId> for http::HeaderValue {
     type Error = http::header::InvalidHeaderValue;
 
-    fn try_from(value: AgentId) -> Result<Self, Self::Error> {
+    fn try_from(value: &AgentId) -> Result<Self, Self::Error> {
         http::HeaderValue::from_str(&value.0.to_string())
     }
 }

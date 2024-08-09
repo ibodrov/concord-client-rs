@@ -12,11 +12,14 @@ WebSocket support, respectively.
 - basic [QueueClient](src/queue_client.rs) implementation:
   - [x] maintains a WebSocket connection to the Concord server
   - [x] provides high-level API like `next_process` and `next_command`
+  - [ ] graceful shutdown
   - [ ] automatic re-connection on errors
+  - [ ] timeouts
 - basic [ApiClient](src/api_client.rs) implementation:
   - [x] can update process status
   - [x] download process state
   - [x] create and update log segments
+  - [ ] timeouts
   - [ ] everything else
 
 ## Code Conventions

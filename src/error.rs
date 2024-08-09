@@ -15,11 +15,18 @@ impl ApiError {
 
 #[macro_export]
 macro_rules! api_error {
-($($arg:tt)*) => {
-    ApiError {
-        message: format!($($arg)*),
-    }
-};
+    ($($arg:tt)*) => {
+        ApiError {
+            message: format!($($arg)*),
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! api_err {
+    ($($arg:tt)*) => {
+        Err(api_error!($($arg)*))
+    };
 }
 
 impl std::error::Error for ApiError {}

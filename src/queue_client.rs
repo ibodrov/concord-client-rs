@@ -1,28 +1,9 @@
-use std::{
-    collections::HashMap,
-    fmt::Debug,
-    sync::{atomic::AtomicI64, Arc},
-    time::Duration,
-};
-
-use futures::{SinkExt, StreamExt};
-use http::{
-    header::{
-        AUTHORIZATION, CONNECTION, HOST, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, UPGRADE, USER_AGENT,
-    },
-    Request, Uri,
-};
 use serde::{Deserialize, Serialize};
-use tokio::{
-    sync::{mpsc, oneshot, Mutex},
-    task::JoinHandle,
-    time::interval,
-};
-use tokio_tungstenite::tungstenite::{self, handshake::client::generate_key};
+use tokio_tungstenite::tungstenite;
 use tracing::{debug, warn};
 
 use crate::{
-    api_error,
+    api_err, api_error,
     error::ApiError,
     model::{AgentId, ApiToken, ProcessId, SessionToken, USER_AGENT_VALUE},
 };
@@ -36,26 +17,15 @@ impl CorrelationId {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CorrelationIdGenerator {
-    v: Arc<AtomicI64>,
-}
-
-impl Default for CorrelationIdGenerator {
-    fn default() -> Self {
-        Self::new()
-    }
+    v: std::sync::Arc<std::sync::atomic::AtomicI64>,
 }
 
 impl CorrelationIdGenerator {
-    pub fn new() -> Self {
-        CorrelationIdGenerator {
-            v: Arc::new(AtomicI64::new(0)),
-        }
-    }
-
     pub fn next(&self) -> CorrelationId {
-        CorrelationId(self.v.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+        let id = self.v.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        CorrelationId(id)
     }
 }
 
@@ -103,7 +73,16 @@ pub struct ProcessResponse {
 
 type Reply = Result<Message, ApiError>;
 
-struct Responder(CorrelationId, oneshot::Sender<Reply>);
+struct Responder(CorrelationId, tokio::sync::oneshot::Sender<Reply>);
+
+#[derive(Default, Clone)]
+struct ResponseQueue(std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<CorrelationId, Responder>>>);
+
+impl ResponseQueue {
+    async fn lock(&self) -> tokio::sync::MutexGuard<std::collections::HashMap<CorrelationId, Responder>> {
+        self.0.lock().await
+    }
+}
 
 struct MessageToSend {
     msg: tungstenite::Message,
@@ -135,38 +114,39 @@ impl MessageToSend {
 
 pub struct Config {
     pub agent_id: AgentId,
-    pub uri: Uri,
+    pub uri: http::Uri,
     pub api_token: ApiToken,
     pub capabilities: serde_json::Value,
-    pub ping_interval: Duration,
+    pub ping_interval: std::time::Duration,
 }
 
 pub struct QueueClient {
-    agent_id: AgentId,
-    capabilities: serde_json::Value,
-    tx: mpsc::Sender<MessageToSend>,
-    _ping_task: JoinHandle<()>,
-    _write_task: JoinHandle<()>,
-    _read_task: JoinHandle<()>,
+    config: Config,
+    tx: tokio::sync::mpsc::Sender<MessageToSend>,
+    _ping_task: tokio::task::JoinHandle<()>,
+    _write_task: tokio::task::JoinHandle<()>,
+    _read_task: tokio::task::JoinHandle<()>,
 }
 
 impl QueueClient {
     pub async fn connect(config: Config) -> Result<Self, ApiError> {
-        let req = QueueClient::create_connect_request(config.uri, config.agent_id, config.api_token)?;
+        let req = QueueClient::create_connect_request(&config)?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(req).await?;
-        let (mut write, mut read) = ws_stream.split();
+
+        use futures::StreamExt;
+        let (mut ws_write, mut ws_read) = ws_stream.split();
 
         // a channel to communicate between tasks
-        let (tx, mut rx) = mpsc::channel::<MessageToSend>(1);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<MessageToSend>(1);
 
         // used to match responses to requests using correlation IDs
-        let message_queue = Arc::new(Mutex::new(HashMap::<CorrelationId, Responder>::new()));
+        let response_queue = ResponseQueue::default();
 
         // task to send pings
         let _ping_task = {
             let tx = tx.clone();
             tokio::spawn(async move {
-                let mut interval = interval(config.ping_interval);
+                let mut interval = tokio::time::interval(config.ping_interval);
                 loop {
                     interval.tick().await;
                     if let Err(e) = tx.send(MessageToSend::ping()).await {
@@ -176,19 +156,19 @@ impl QueueClient {
             })
         };
 
-        // send messages to the server
+        // task to send messages to the server
         let _write_task = {
-            let message_queue = message_queue.clone();
+            let response_queue = response_queue.clone();
             tokio::spawn(async move {
                 while let Some(MessageToSend { msg, resp }) = rx.recv().await {
-                    match write.send(msg).await {
+                    use futures::SinkExt;
+                    match ws_write.send(msg).await {
                         Ok(_) => {
                             // message sent successfully, register the responder if needed
                             if let Some(Responder(correlation_id, channel)) = resp {
-                                message_queue
-                                    .lock()
-                                    .await
-                                    .insert(correlation_id, Responder(correlation_id, channel));
+                                let mut response_queue = response_queue.lock().await;
+                                let responder = Responder(correlation_id, channel);
+                                response_queue.insert(correlation_id, responder);
                             }
                         }
                         Err(e) => {
@@ -206,11 +186,11 @@ impl QueueClient {
             })
         };
 
-        // receive messages from the server
+        // task to receive messages from the server
         let _read_task = {
             let tx = tx.clone();
             tokio::spawn(async move {
-                while let Some(msg) = read.next().await {
+                while let Some(msg) = ws_read.next().await {
                     match msg {
                         Ok(msg) => match msg {
                             tungstenite::Message::Ping(_) => {
@@ -225,8 +205,8 @@ impl QueueClient {
                             }
                             tungstenite::Message::Text(text) => {
                                 debug!("Received message: {}", text);
-                                let message_queue = message_queue.clone();
-                                QueueClient::handle_text_message(text, message_queue).await;
+                                let response_queue = response_queue.clone();
+                                QueueClient::handle_text_message(text, response_queue).await;
                             }
                             _ => {
                                 // log and ignore bad messages
@@ -243,8 +223,7 @@ impl QueueClient {
         };
 
         Ok(QueueClient {
-            agent_id: config.agent_id,
-            capabilities: config.capabilities,
+            config,
             tx,
             _ping_task,
             _write_task,
@@ -255,7 +234,7 @@ impl QueueClient {
     pub async fn next_command(&self, correlation_id: CorrelationId) -> Result<CommandResponse, ApiError> {
         let msg = Message::CommandRequest {
             correlation_id,
-            agent_id: self.agent_id,
+            agent_id: self.config.agent_id,
         };
 
         match self.send_and_wait_for_reply(correlation_id, msg).await {
@@ -265,21 +244,18 @@ impl QueueClient {
                 if correlation_id == reply_correlation_id {
                     Ok(CommandResponse { correlation_id })
                 } else {
-                    Err(api_error!(
-                        "Unexpected correlation ID: {:?}",
-                        reply_correlation_id
-                    ))
+                    api_err!("Unexpected correlation ID: {:?}", reply_correlation_id)
                 }
             }
-            Ok(msg) => Err(api_error!("Unexpected message: {:?}", msg)),
-            Err(e) => Err(api_error!("Error while parsing message: {}", e)),
+            Ok(msg) => api_err!("Unexpected message: {:?}", msg),
+            Err(e) => api_err!("Error while parsing message: {}", e),
         }
     }
 
     pub async fn next_process(&self, correlation_id: CorrelationId) -> Result<ProcessResponse, ApiError> {
         let msg = Message::ProcessRequest {
             correlation_id,
-            capabilities: serde_json::json!(&self.capabilities),
+            capabilities: serde_json::json!(&self.config.capabilities),
         };
 
         match self.send_and_wait_for_reply(correlation_id, msg).await {
@@ -295,34 +271,31 @@ impl QueueClient {
                         process_id,
                     })
                 } else {
-                    Err(api_error!(
-                        "Unexpected correlation ID: {:?}",
-                        reply_correlation_id
-                    ))
+                    api_err!("Unexpected correlation ID: {:?}", reply_correlation_id)
                 }
             }
-            Ok(msg) => Err(api_error!("Unexpected message: {:?}", msg)),
-            Err(e) => Err(api_error!("Error while parsing message: {}", e)),
+            Ok(msg) => api_err!("Unexpected message: {:?}", msg),
+            Err(e) => api_err!("Error while parsing message: {}", e),
         }
     }
 
     async fn send_and_wait_for_reply(&self, correlation_id: CorrelationId, msg: Message) -> Reply {
         let json = serde_json::to_string(&msg)?;
 
-        let (reply_sender, reply_receiver) = oneshot::channel::<Reply>();
+        let (reply_sender, reply_receiver) = tokio::sync::oneshot::channel::<Reply>();
 
         let msg = MessageToSend::text(json, Responder(correlation_id, reply_sender));
         if let Err(e) = self.tx.send(msg).await {
-            return Err(api_error!("Send error: {e}"));
+            return api_err!("Send error: {e}");
         }
 
         match reply_receiver.await {
             Ok(reply) => reply,
-            Err(e) => Err(api_error!("Error while receiving reply: {e}")),
+            Err(e) => api_err!("Error while receiving reply: {e}"),
         }
     }
 
-    async fn handle_text_message(text: String, message_queue: Arc<Mutex<HashMap<CorrelationId, Responder>>>) {
+    async fn handle_text_message(text: String, message_queue: ResponseQueue) {
         match serde_json::from_str::<Message>(&text) {
             Ok(
                 cmd @ Message::CommandResponse { correlation_id, .. }
@@ -347,9 +320,12 @@ impl QueueClient {
     }
 
     fn create_connect_request(
-        uri: Uri,
-        agent_id: AgentId,
-        api_token: ApiToken,
+        Config {
+            uri,
+            api_token,
+            agent_id,
+            ..
+        }: &Config,
     ) -> Result<http::Request<()>, ApiError> {
         let host = format!(
             "{}:{}",
@@ -357,17 +333,18 @@ impl QueueClient {
             uri.port_u16().unwrap_or(8001)
         );
 
-        let ws_key = generate_key();
+        let ws_key = tungstenite::handshake::client::generate_key();
 
+        use http::{header, Request};
         Request::builder()
             .uri(uri.clone())
-            .header(HOST, host)
-            .header(AUTHORIZATION, api_token)
-            .header(CONNECTION, "Upgrade")
-            .header(UPGRADE, "websocket")
-            .header(SEC_WEBSOCKET_VERSION, "13")
-            .header(SEC_WEBSOCKET_KEY, ws_key)
-            .header(USER_AGENT, USER_AGENT_VALUE)
+            .header(header::HOST, host)
+            .header(header::AUTHORIZATION, api_token)
+            .header(header::CONNECTION, "Upgrade")
+            .header(header::UPGRADE, "websocket")
+            .header(header::SEC_WEBSOCKET_VERSION, "13")
+            .header(header::SEC_WEBSOCKET_KEY, ws_key)
+            .header(header::USER_AGENT, USER_AGENT_VALUE)
             .header("X-Concord-Agent-Id", agent_id)
             .header("X-Concord-Agent", USER_AGENT_VALUE)
             .body(())
