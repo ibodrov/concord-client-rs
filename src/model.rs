@@ -111,6 +111,12 @@ impl SegmentCorrelationId {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct LogSegmentId(i64);
 
+impl LogSegmentId {
+    pub fn new(v: i64) -> Self {
+        Self(v)
+    }
+}
+
 impl std::fmt::Display for LogSegmentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
