@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+
 pub static USER_AGENT_VALUE: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -108,7 +109,7 @@ impl SegmentCorrelationId {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct LogSegmentId(i64);
 
 impl LogSegmentId {
@@ -123,11 +124,11 @@ impl std::fmt::Display for LogSegmentId {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum LogSegmentStatus {
     Ok,
-    Failed,
+    Error,
     Running,
     Suspended,
 }

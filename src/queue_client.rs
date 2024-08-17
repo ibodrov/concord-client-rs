@@ -3,7 +3,7 @@ use tokio_tungstenite::tungstenite;
 use tracing::{debug, warn};
 
 use crate::{
-    api_err, api_error,
+    api_err,
     error::ApiError,
     model::{AgentId, ApiToken, ProcessId, SessionToken, USER_AGENT_VALUE},
 };

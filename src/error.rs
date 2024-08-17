@@ -25,7 +25,7 @@ macro_rules! api_error {
 #[macro_export]
 macro_rules! api_err {
     ($($arg:tt)*) => {
-        Err(api_error!($($arg)*))
+        Err($crate::api_error!($($arg)*))
     };
 }
 
