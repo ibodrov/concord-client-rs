@@ -108,7 +108,7 @@ impl SegmentCorrelationId {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct LogSegmentId(i64);
 
 impl LogSegmentId {
