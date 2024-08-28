@@ -31,7 +31,7 @@ impl TryFrom<&ApiToken> for http::HeaderValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct ProcessId(Uuid);
 
 impl ProcessId {
@@ -46,8 +46,14 @@ impl std::fmt::Display for ProcessId {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct AgentId(pub Uuid);
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+pub struct AgentId(Uuid);
+
+impl AgentId {
+    pub fn new(v: Uuid) -> Self {
+        Self(v)
+    }
+}
 
 impl std::fmt::Display for AgentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -108,7 +114,7 @@ impl SegmentCorrelationId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogSegmentId(i64);
 
 impl LogSegmentId {

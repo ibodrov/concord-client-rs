@@ -96,7 +96,7 @@ impl<'a> ProcessApiClient<'a> {
     ) -> Result<(), ApiError> {
         let req = format!("{status}");
         let resp = post!(self, "/api/v1/process/{process_id}/status")
-            .query(&[("agent_id", agent_id.0)])
+            .query(&[("agent_id", agent_id)])
             .header(header::CONTENT_TYPE, "text/plain")
             .body(req)
             .send()
