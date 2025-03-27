@@ -8,6 +8,14 @@ pub static USER_AGENT_VALUE: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("C
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionToken(String);
 
+impl TryFrom<&SessionToken> for http::HeaderValue {
+    type Error = http::header::InvalidHeaderValue;
+
+    fn try_from(value: &SessionToken) -> Result<Self, Self::Error> {
+        http::HeaderValue::from_str(&value.0)
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ApiToken(String);
 

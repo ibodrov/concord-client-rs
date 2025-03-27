@@ -1,14 +1,17 @@
 use std::path::PathBuf;
 
-use http::{header, HeaderValue};
+use http::{
+    header::{self, HeaderMap},
+    HeaderValue,
+};
 use url::Url;
 
 use crate::{
     api_err, api_error,
     error::ApiError,
     model::{
-        AgentId, ApiToken, LogSegmentId, LogSegmentOperationResponse, LogSegmentRequest,
-        LogSegmentUpdateRequest, ProcessId, ProcessStatus, USER_AGENT_VALUE,
+        AgentId, LogSegmentId, LogSegmentOperationResponse, LogSegmentRequest, LogSegmentUpdateRequest,
+        ProcessId, ProcessStatus, SessionToken, USER_AGENT_VALUE,
     },
 };
 
@@ -38,7 +41,7 @@ macro_rules! post_json {
 
 pub struct Config {
     pub base_url: Url,
-    pub api_token: ApiToken,
+    pub session_token: SessionToken,
     pub temp_dir: PathBuf,
 }
 
@@ -50,17 +53,15 @@ pub struct ApiClient {
 impl ApiClient {
     pub fn new(config: Config) -> Result<Self, ApiError> {
         let authorization_header =
-            HeaderValue::try_from(&config.api_token).map_err(|e| api_error!("Invalid api_key: {e}"))?;
-
-        let default_headers = {
-            let mut m = header::HeaderMap::new();
-            m.insert(header::USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
-            m.insert(header::AUTHORIZATION, authorization_header);
-            m
-        };
+            HeaderValue::try_from(&config.session_token).map_err(|e| api_error!("Invalid api_key: {e}"))?;
 
         let client = reqwest::ClientBuilder::new()
-            .default_headers(default_headers)
+            .default_headers({
+                let mut m = HeaderMap::new();
+                m.insert(header::USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
+                m.insert("X-Concord-SessionToken", authorization_header);
+                m
+            })
             .build()?;
 
         Ok(ApiClient { config, client })
