@@ -1,5 +1,6 @@
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use tokio_tungstenite::tungstenite;
+use tokio_tungstenite::tungstenite::{self, Utf8Bytes};
 use tracing::{debug, warn};
 
 use crate::{
@@ -92,21 +93,21 @@ struct MessageToSend {
 impl MessageToSend {
     fn ping() -> Self {
         MessageToSend {
-            msg: tungstenite::Message::Ping(vec![]),
+            msg: tungstenite::Message::Ping(Bytes::new()),
             resp: None,
         }
     }
 
     fn pong() -> Self {
         MessageToSend {
-            msg: tungstenite::Message::Pong(vec![]),
+            msg: tungstenite::Message::Pong(Bytes::new()),
             resp: None,
         }
     }
 
     fn text(text: String, resp: Responder) -> Self {
         MessageToSend {
-            msg: tungstenite::Message::Text(text),
+            msg: tungstenite::Message::Text(text.into()),
             resp: Some(resp),
         }
     }
@@ -295,7 +296,7 @@ impl QueueClient {
         }
     }
 
-    async fn handle_text_message(text: String, message_queue: ResponseQueue) {
+    async fn handle_text_message(text: Utf8Bytes, message_queue: ResponseQueue) {
         match serde_json::from_str::<Message>(&text) {
             Ok(
                 cmd @ Message::CommandResponse { correlation_id, .. }

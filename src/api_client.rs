@@ -87,7 +87,7 @@ impl std::fmt::Debug for ProcessApiClient<'_> {
     }
 }
 
-impl<'a> ProcessApiClient<'a> {
+impl ProcessApiClient<'_> {
     pub async fn update_status(
         &self,
         process_id: ProcessId,
