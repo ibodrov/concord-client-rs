@@ -151,7 +151,7 @@ impl QueueClient {
                 loop {
                     interval.tick().await;
                     if let Err(e) = tx.send(MessageToSend::ping()).await {
-                        warn!("Ping error: {}", e);
+                        warn!("Ping error: {e}");
                     }
                 }
             })
@@ -174,7 +174,7 @@ impl QueueClient {
                         }
                         Err(e) => {
                             // message failed to send, notify the responder if needed
-                            let err = format!("Write error: {}", e);
+                            let err = format!("Write error: {e}");
                             warn!("{}", err);
                             if let Some(Responder(_, channel)) = resp {
                                 if channel.send(Err(ApiError::simple(&err))).is_err() {
@@ -197,7 +197,7 @@ impl QueueClient {
                             tungstenite::Message::Ping(_) => {
                                 // respond to pings
                                 if let Err(e) = tx.send(MessageToSend::pong()).await {
-                                    warn!("Pong error: {}", e);
+                                    warn!("Pong error: {e}");
                                 }
                             }
                             tungstenite::Message::Pong(_) => {
@@ -211,12 +211,12 @@ impl QueueClient {
                             }
                             _ => {
                                 // log and ignore bad messages
-                                warn!("Unexpected message (possibly a bug): {:?}", msg);
+                                warn!("Unexpected message (possibly a bug): {msg:?}");
                             }
                         },
                         Err(e) => {
                             // complain about network errors
-                            warn!("Read error: {}", e);
+                            warn!("Read error: {e}");
                         }
                     }
                 }
@@ -245,11 +245,11 @@ impl QueueClient {
                 if correlation_id == reply_correlation_id {
                     Ok(CommandResponse { correlation_id })
                 } else {
-                    api_err!("Unexpected correlation ID: {:?}", reply_correlation_id)
+                    api_err!("Unexpected correlation ID: {reply_correlation_id:?}")
                 }
             }
-            Ok(msg) => api_err!("Unexpected message: {:?}", msg),
-            Err(e) => api_err!("Error while parsing message: {}", e),
+            Ok(msg) => api_err!("Unexpected message: {msg:?}"),
+            Err(e) => api_err!("Error while parsing message: {e}"),
         }
     }
 
@@ -272,11 +272,11 @@ impl QueueClient {
                         process_id,
                     })
                 } else {
-                    api_err!("Unexpected correlation ID: {:?}", reply_correlation_id)
+                    api_err!("Unexpected correlation ID: {reply_correlation_id:?}")
                 }
             }
-            Ok(msg) => api_err!("Unexpected message: {:?}", msg),
-            Err(e) => api_err!("Error while parsing message: {}", e),
+            Ok(msg) => api_err!("Unexpected message: {msg:?}"),
+            Err(e) => api_err!("Error while parsing message: {e}"),
         }
     }
 
