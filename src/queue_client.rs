@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite::{self, Utf8Bytes};
 use tokio_util::sync::CancellationToken;
@@ -128,7 +129,6 @@ impl QueueClient {
         let req = QueueClient::create_connect_request(&config)?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(req).await?;
 
-        use futures::StreamExt;
         let (mut ws_write, mut ws_read) = ws_stream.split();
 
         // a channel to communicate between tasks
@@ -175,7 +175,6 @@ impl QueueClient {
                         },
                         msg = rx.recv() => {
                             if let Some(MessageToSend { msg, resp }) = msg {
-                                use futures::SinkExt;
                                 match ws_write.send(msg).await {
                                     Ok(_) => {
                                         // message sent successfully, register the responder if needed
