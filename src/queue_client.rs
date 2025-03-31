@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite::{self, Utf8Bytes};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::{
@@ -12,19 +13,13 @@ use crate::{
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct CorrelationId(i64);
 
-impl CorrelationId {
-    pub fn new(i: i64) -> Self {
-        CorrelationId(i)
-    }
-}
-
 #[derive(Clone, Default)]
-pub struct CorrelationIdGenerator {
+struct CorrelationIdGenerator {
     v: std::sync::Arc<std::sync::atomic::AtomicI64>,
 }
 
 impl CorrelationIdGenerator {
-    pub fn next(&self) -> CorrelationId {
+    fn next(&self) -> CorrelationId {
         let id = self.v.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         CorrelationId(id)
     }
@@ -124,9 +119,8 @@ pub struct Config {
 pub struct QueueClient {
     config: Config,
     tx: tokio::sync::mpsc::Sender<MessageToSend>,
-    _ping_task: tokio::task::JoinHandle<()>,
-    _write_task: tokio::task::JoinHandle<()>,
-    _read_task: tokio::task::JoinHandle<()>,
+    cancellation_token: CancellationToken,
+    correlation_id_gen: CorrelationIdGenerator,
 }
 
 impl QueueClient {
@@ -143,43 +137,67 @@ impl QueueClient {
         // used to match responses to requests using correlation IDs
         let response_queue = ResponseQueue::default();
 
+        let cancellation_token = CancellationToken::new();
+
         // task to send pings
+        let token = cancellation_token.clone();
         let _ping_task = {
             let tx = tx.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(config.ping_interval);
                 loop {
-                    interval.tick().await;
-                    if let Err(e) = tx.send(MessageToSend::ping()).await {
-                        warn!("Ping error: {e}");
+                    tokio::select! {
+                        _ = token.cancelled() => {
+                            debug!("Stopping ping task...");
+                            break
+                        }
+                        _ = interval.tick() => {
+                            debug!("Sending a ping...");
+                            if let Err(e) = tx.send(MessageToSend::ping()).await {
+                                warn!("Failed to send a ping message to the server: {e}");
+                            }
+                        }
                     }
                 }
             })
         };
 
         // task to send messages to the server
+        let token = cancellation_token.clone();
         let _write_task = {
             let response_queue = response_queue.clone();
             tokio::spawn(async move {
-                while let Some(MessageToSend { msg, resp }) = rx.recv().await {
-                    use futures::SinkExt;
-                    match ws_write.send(msg).await {
-                        Ok(_) => {
-                            // message sent successfully, register the responder if needed
-                            if let Some(Responder(correlation_id, channel)) = resp {
-                                let mut response_queue = response_queue.lock().await;
-                                let responder = Responder(correlation_id, channel);
-                                response_queue.insert(correlation_id, responder);
-                            }
-                        }
-                        Err(e) => {
-                            // message failed to send, notify the responder if needed
-                            let err = format!("Write error: {e}");
-                            warn!("{}", err);
-                            if let Some(Responder(_, channel)) = resp {
-                                if channel.send(Err(ApiError::simple(&err))).is_err() {
-                                    warn!("Responder error (most likely a bug)");
+                loop {
+                    tokio::select! {
+                        _ = token.cancelled() => {
+                            debug!("Stopping message sender...");
+                            break
+                        },
+                        msg = rx.recv() => {
+                            if let Some(MessageToSend { msg, resp }) = msg {
+                                use futures::SinkExt;
+                                match ws_write.send(msg).await {
+                                    Ok(_) => {
+                                        // message sent successfully, register the responder if needed
+                                        if let Some(Responder(correlation_id, channel)) = resp {
+                                            let mut response_queue = response_queue.lock().await;
+                                            let responder = Responder(correlation_id, channel);
+                                            response_queue.insert(correlation_id, responder);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        // message failed to send, notify the responder if needed
+                                        let err = format!("Write error: {e}");
+                                        warn!("{}", err);
+                                        if let Some(Responder(_, channel)) = resp {
+                                            if channel.send(Err(ApiError::simple(&err))).is_err() {
+                                                warn!("Responder error (most likely a bug)");
+                                            }
+                                        }
+                                    }
                                 }
+                            } else {
+                                break
                             }
                         }
                     }
@@ -188,35 +206,45 @@ impl QueueClient {
         };
 
         // task to receive messages from the server
+        let token = cancellation_token.clone();
         let _read_task = {
             let tx = tx.clone();
             tokio::spawn(async move {
-                while let Some(msg) = ws_read.next().await {
-                    match msg {
-                        Ok(msg) => match msg {
-                            tungstenite::Message::Ping(_) => {
-                                // respond to pings
-                                if let Err(e) = tx.send(MessageToSend::pong()).await {
-                                    warn!("Pong error: {e}");
+                loop {
+                    tokio::select! {
+                        _ = token.cancelled() => {
+                            debug!("Stopping message received...");
+                            break
+                        }
+                        msg = ws_read.next() => {
+                            match msg {
+                                Some(Ok(msg)) => match msg {
+                                    tungstenite::Message::Ping(_) => {
+                                        // respond to pings
+                                        if let Err(e) = tx.send(MessageToSend::pong()).await {
+                                            warn!("Failed to send a pong response to the server: {e}");
+                                        }
+                                    }
+                                    tungstenite::Message::Pong(_) => {
+                                        // log pongs
+                                        debug!("Received a pong");
+                                    }
+                                    tungstenite::Message::Text(text) => {
+                                        debug!("Received message: {}", text);
+                                        QueueClient::handle_text_message(text, &response_queue).await;
+                                    }
+                                    _ => {
+                                        // log and ignore bad messages
+                                        warn!("Unexpected message (possibly a bug): {msg:?}");
+                                    }
+                                },
+                                Some(Err(e)) => {
+                                    // complain about network errors and stop
+                                    warn!("Read error: {e}");
+                                    token.cancel();
                                 }
+                                None => break,
                             }
-                            tungstenite::Message::Pong(_) => {
-                                // log pongs
-                                debug!("Received a pong");
-                            }
-                            tungstenite::Message::Text(text) => {
-                                debug!("Received message: {}", text);
-                                let response_queue = response_queue.clone();
-                                QueueClient::handle_text_message(text, response_queue).await;
-                            }
-                            _ => {
-                                // log and ignore bad messages
-                                warn!("Unexpected message (possibly a bug): {msg:?}");
-                            }
-                        },
-                        Err(e) => {
-                            // complain about network errors
-                            warn!("Read error: {e}");
                         }
                     }
                 }
@@ -226,13 +254,14 @@ impl QueueClient {
         Ok(QueueClient {
             config,
             tx,
-            _ping_task,
-            _write_task,
-            _read_task,
+            cancellation_token,
+            correlation_id_gen: Default::default(),
         })
     }
 
-    pub async fn next_command(&self, correlation_id: CorrelationId) -> Result<CommandResponse, ApiError> {
+    pub async fn next_command(&self) -> Result<CommandResponse, ApiError> {
+        let correlation_id = self.correlation_id_gen.next();
+
         let msg = Message::CommandRequest {
             correlation_id,
             agent_id: self.config.agent_id,
@@ -253,7 +282,9 @@ impl QueueClient {
         }
     }
 
-    pub async fn next_process(&self, correlation_id: CorrelationId) -> Result<ProcessResponse, ApiError> {
+    pub async fn next_process(&self) -> Result<ProcessResponse, ApiError> {
+        let correlation_id = self.correlation_id_gen.next();
+
         let msg = Message::ProcessRequest {
             correlation_id,
             capabilities: serde_json::json!(&self.config.capabilities),
@@ -296,7 +327,7 @@ impl QueueClient {
         }
     }
 
-    async fn handle_text_message(text: Utf8Bytes, message_queue: ResponseQueue) {
+    async fn handle_text_message(text: Utf8Bytes, message_queue: &ResponseQueue) {
         match serde_json::from_str::<Message>(&text) {
             Ok(
                 cmd @ Message::CommandResponse { correlation_id, .. }
@@ -315,7 +346,7 @@ impl QueueClient {
             }
             Err(e) => {
                 // complain about parsing errors
-                warn!("Error while parsing message (possibly a bug): {}", e);
+                warn!("Error while parsing message (possibly a bug): {e}");
             }
         }
     }
@@ -336,7 +367,7 @@ impl QueueClient {
 
         let ws_key = tungstenite::handshake::client::generate_key();
 
-        use http::{header, Request};
+        use http::{Request, header};
         Request::builder()
             .uri(uri.clone())
             .header(header::HOST, host)
@@ -352,5 +383,11 @@ impl QueueClient {
             .map_err(|e| ApiError {
                 message: e.to_string(),
             })
+    }
+}
+
+impl Drop for QueueClient {
+    fn drop(&mut self) {
+        self.cancellation_token.cancel();
     }
 }

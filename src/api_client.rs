@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use http::{
-    header::{self, HeaderMap},
     HeaderValue,
+    header::{self, HeaderMap},
 };
 use url::Url;
 
