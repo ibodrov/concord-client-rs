@@ -118,15 +118,16 @@ pub struct Config {
 }
 
 pub struct QueueClient {
-    config: Config,
+    agent_id: AgentId,
+    capabilities: serde_json::Value,
     tx: tokio::sync::mpsc::Sender<MessageToSend>,
     cancellation_token: CancellationToken,
     correlation_id_gen: CorrelationIdGenerator,
 }
 
 impl QueueClient {
-    pub async fn connect(config: Config) -> Result<Self, ApiError> {
-        let req = QueueClient::create_connect_request(&config)?;
+    pub async fn connect(config: &Config) -> Result<Self, ApiError> {
+        let req = QueueClient::create_connect_request(config)?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(req).await?;
 
         let (mut ws_write, mut ws_read) = ws_stream.split();
@@ -143,8 +144,9 @@ impl QueueClient {
         let token = cancellation_token.clone();
         let _ping_task = {
             let tx = tx.clone();
+            let ping_interval = config.ping_interval;
             tokio::spawn(async move {
-                let mut interval = tokio::time::interval(config.ping_interval);
+                let mut interval = tokio::time::interval(ping_interval);
                 loop {
                     tokio::select! {
                         _ = token.cancelled() => {
@@ -251,7 +253,8 @@ impl QueueClient {
         };
 
         Ok(QueueClient {
-            config,
+            agent_id: config.agent_id,
+            capabilities: config.capabilities.clone(),
             tx,
             cancellation_token,
             correlation_id_gen: Default::default(),
@@ -263,7 +266,7 @@ impl QueueClient {
 
         let msg = Message::CommandRequest {
             correlation_id,
-            agent_id: self.config.agent_id,
+            agent_id: self.agent_id,
         };
 
         match self.send_and_wait_for_reply(correlation_id, msg).await {
@@ -286,7 +289,7 @@ impl QueueClient {
 
         let msg = Message::ProcessRequest {
             correlation_id,
-            capabilities: serde_json::json!(&self.config.capabilities),
+            capabilities: serde_json::json!(&self.capabilities),
         };
 
         match self.send_and_wait_for_reply(correlation_id, msg).await {
