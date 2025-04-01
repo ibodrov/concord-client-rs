@@ -32,6 +32,7 @@ enum Message {
     CommandRequest {
         #[serde(rename = "correlationId")]
         correlation_id: CorrelationId,
+        #[serde(rename = "agentId")]
         agent_id: AgentId,
     },
     CommandResponse {
