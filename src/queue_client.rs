@@ -314,6 +314,8 @@ impl QueueClient {
     }
 
     async fn send_and_wait_for_reply(&self, correlation_id: CorrelationId, msg: Message) -> Reply {
+        debug!("Sending message {msg:?} and waiting for reply");
+
         let json = serde_json::to_string(&msg)?;
 
         let (reply_sender, reply_receiver) = tokio::sync::oneshot::channel::<Reply>();
