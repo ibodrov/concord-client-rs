@@ -150,7 +150,7 @@ impl std::fmt::Display for LogSegmentId {
 #[serde(rename_all = "UPPERCASE")]
 pub enum LogSegmentStatus {
     Ok,
-    Error,
+    Failed,
     Running,
     Suspended,
 }

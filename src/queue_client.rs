@@ -343,6 +343,8 @@ impl QueueClient {
                     if responder.send(Ok(cmd)).is_err() {
                         warn!("Responder error (most likely a bug)");
                     }
+                } else {
+                    warn!("No responder registered for correlation_id={correlation_id:?} (possibly a bug).")
                 }
             }
             Ok(msg) => {
