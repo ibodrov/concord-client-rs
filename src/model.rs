@@ -1,4 +1,4 @@
-use std::{fmt::Debug, str::FromStr};
+use std::{fmt::Debug, num::ParseIntError, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -137,6 +137,14 @@ pub struct LogSegmentId(i64);
 impl LogSegmentId {
     pub fn new(v: i64) -> Self {
         Self(v)
+    }
+}
+
+impl FromStr for LogSegmentId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(LogSegmentId::new(s.parse()?))
     }
 }
 
