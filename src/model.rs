@@ -46,6 +46,10 @@ impl ProcessId {
     pub fn new(v: Uuid) -> Self {
         Self(v)
     }
+
+    pub fn uuid(&self) -> &Uuid {
+        &self.0
+    }
 }
 
 impl std::fmt::Display for ProcessId {
@@ -86,6 +90,18 @@ impl TryFrom<&AgentId> for http::HeaderValue {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+pub struct OrganizationId(Uuid);
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+pub struct ProjectId(Uuid);
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+pub struct RepositoryId(Uuid);
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+pub struct UserId(Uuid);
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum ProcessStatus {
@@ -120,6 +136,69 @@ impl std::fmt::Display for ProcessStatus {
             ProcessStatus::TimedOut => write!(f, "TIMED_OUT"),
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum ProcessKind {
+    Default,
+    FailureHandler,
+    CancelHandler,
+    TimeoutHandler,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartProcessResponse {
+    pub instance_id: ProcessId,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessEntry {
+    pub instance_id: ProcessId,
+    pub parent_instance_id: Option<ProcessId>,
+    pub status: ProcessStatus,
+    pub kind: ProcessKind,
+    pub org_id: Option<OrganizationId>,
+    pub org_name: Option<String>,
+    pub project_id: Option<ProjectId>,
+    pub project_name: Option<String>,
+    pub repo_id: Option<RepositoryId>,
+    pub repo_name: Option<String>,
+    pub repo_url: Option<String>,
+    pub repo_path: Option<String>,
+    pub commit_id: Option<String>,
+    pub commit_branch: Option<String>,
+    // TODO
+    // #[serde(with = "iso8601")]
+    // pub created_at: OffsetDateTime,
+    pub initiator: Option<String>,
+    pub initiator_id: Option<UserId>,
+    pub last_agent_id: Option<String>,
+    // TODO
+    // #[serde(with = "iso8601::option")]
+    // pub start_at: Option<OffsetDateTime>,
+    // TODO
+    // #[serde(with = "iso8601::option")]
+    // pub last_updated_at: Option<OffsetDateTime>,
+    // TODO
+    // #[serde(with = "iso8601::option")]
+    // pub last_run_at: Option<OffsetDateTime>,
+    pub total_runtime_ms: Option<u64>,
+    pub tags: Option<Vec<String>>,
+    pub children_ids: Option<Vec<ProcessId>>,
+    // TODO meta
+    pub handlers: Option<Vec<String>>,
+    // TODO requirements
+    pub disabled: bool,
+    // TODO checkpoints
+    // TODO checkpointRestoreHistory
+    // TODO statusHistory
+    // TODO triggeredBy
+    pub timeout: Option<u64>,
+    pub suspend_timeout: Option<u64>,
+    pub runtime: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

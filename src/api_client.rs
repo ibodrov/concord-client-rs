@@ -1,11 +1,14 @@
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 use http::{
     HeaderValue,
     header::{self, HeaderMap},
 };
+use reqwest::multipart;
 use url::Url;
 
+use crate::model::{ApiToken, ProcessEntry, StartProcessResponse};
 use crate::{
     api_err, api_error,
     error::ApiError,
@@ -41,8 +44,9 @@ macro_rules! post_json {
 
 pub struct Config {
     pub base_url: Url,
-    pub session_token: SessionToken,
-    pub temp_dir: PathBuf,
+    pub session_token: Option<SessionToken>,
+    pub api_token: Option<ApiToken>,
+    pub temp_dir: Option<PathBuf>,
 }
 
 pub struct ApiClient {
@@ -52,16 +56,23 @@ pub struct ApiClient {
 
 impl ApiClient {
     pub fn new(config: Config) -> Result<Self, ApiError> {
-        let authorization_header =
-            HeaderValue::try_from(&config.session_token).map_err(|e| api_error!("Invalid api_key: {e}"))?;
+        let mut default_headers = HeaderMap::new();
+        default_headers.insert(header::USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
+
+        if let Some(session_token) = &config.session_token {
+            default_headers.insert(
+                "X-Concord-SessionToken",
+                HeaderValue::try_from(session_token).map_err(|e| api_error!("Invalid session_token: {e}"))?,
+            );
+        } else if let Some(api_token) = &config.api_token {
+            default_headers.insert(
+                "Authorization",
+                HeaderValue::try_from(api_token).map_err(|e| api_error!("Invalid api_token: {e}"))?,
+            );
+        }
 
         let client = reqwest::ClientBuilder::new()
-            .default_headers({
-                let mut m = HeaderMap::new();
-                m.insert(header::USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
-                m.insert("X-Concord-SessionToken", authorization_header);
-                m
-            })
+            .default_headers(default_headers)
             .build()?;
 
         Ok(ApiClient { config, client })
@@ -89,6 +100,35 @@ impl std::fmt::Debug for ProcessApiClient<'_> {
 }
 
 impl ProcessApiClient<'_> {
+    pub async fn start_process<I, T>(&self, input: I) -> Result<StartProcessResponse, ApiError>
+    where
+        I: IntoIterator<Item = (T, multipart::Part)>,
+        T: Into<Cow<'static, str>>,
+    {
+        let mut form = multipart::Form::new();
+        for (k, v) in input.into_iter() {
+            form = form.part(k, v);
+        }
+
+        let resp = post!(self, "/api/v1/process").multipart(form).send().await?;
+
+        if resp.status().is_success() {
+            Ok(resp.json().await?)
+        } else {
+            api_err!("Failed to start a process: {}", resp.status())
+        }
+    }
+
+    pub async fn get_process(&self, process_id: &ProcessId) -> Result<ProcessEntry, ApiError> {
+        let resp = get!(self, "/api/v1/process/{process_id}").send().await?;
+
+        if resp.status().is_success() {
+            Ok(resp.json().await?)
+        } else {
+            api_err!("Failed to get process: {}", resp.status())
+        }
+    }
+
     pub async fn update_status(
         &self,
         process_id: ProcessId,
@@ -103,11 +143,11 @@ impl ProcessApiClient<'_> {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            return api_err!("Failed to update status: {}", resp.status());
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            api_err!("Failed to update status: {}", resp.status())
         }
-
-        Ok(())
     }
 
     pub async fn download_state(&self, process_id: ProcessId) -> Result<PathBuf, ApiError> {
@@ -144,7 +184,12 @@ impl ProcessApiClient<'_> {
     ) -> Result<PathBuf, ApiError> {
         let prefix = prefix.as_ref();
         let suffix = suffix.as_ref();
-        let temp_dir = &self.config.temp_dir;
+
+        let temp_dir = self
+            .config
+            .temp_dir
+            .clone()
+            .ok_or_else(|| api_error!("config.temp_dir is not set"))?;
 
         let mut path = temp_dir.join(format!("{prefix}{suffix}"));
         let mut n = 0;
@@ -170,12 +215,12 @@ impl ProcessApiClient<'_> {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            return api_err!("Failed to update status: {}", resp.status());
+        if resp.status().is_success() {
+            let resp = resp.json::<LogSegmentOperationResponse>().await?;
+            Ok(resp.id)
+        } else {
+            api_err!("Failed to update status: {}", resp.status())
         }
-
-        let resp = resp.json::<LogSegmentOperationResponse>().await?;
-        Ok(resp.id)
     }
 
     pub async fn update_log_segment(
@@ -188,11 +233,11 @@ impl ProcessApiClient<'_> {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            return api_err!("Failed to update status: {}", resp.status());
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            api_err!("Failed to update status: {}", resp.status())
         }
-
-        Ok(())
     }
 
     pub async fn append_to_log_segment(
@@ -207,10 +252,10 @@ impl ProcessApiClient<'_> {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            return api_err!("Failed to update status: {}", resp.status());
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            api_err!("Failed to update status: {}", resp.status())
         }
-
-        Ok(())
     }
 }

@@ -15,7 +15,9 @@ WebSocket support, respectively.
   - [x] graceful shutdown (on drop)
   - [ ] timeouts
 - basic [ApiClient](src/api_client.rs) implementation:
-  - [x] can update process status
+  - [x] start a process
+  - [x] get process details
+  - [x] update process status
   - [x] download process state
   - [x] create and update log segments
   - [ ] timeouts
