@@ -1,6 +1,6 @@
 [package]
 name = "concord-client"
-version = "0.0.8"
+version = "0.0.9"
 edition = "2024"
 authors = ["Ivan Bodrov <ibodrov@gmail.com>"]
 license = "Apache-2.0"
@@ -21,3 +21,8 @@ tokio-util = { version = "0" }
 tracing = "0.1"
 url = "2"
 uuid = { version = "1", features = ["serde"] }
+
+[features]
+default = ["api-client", "queue-client"]
+api-client = []
+queue-client = []
